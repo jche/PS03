@@ -1,6 +1,6 @@
 ---
 title: "STAT/MATH 495: Problem Set 03"
-author: "WRITE YOUR NAME HERE"
+author: "Jonathan Che"
 date: "2017-09-26"
 output:
   html_document:
@@ -16,6 +16,7 @@ knitr::opts_chunk$set(echo = TRUE, fig.width=8, fig.height=4.5)
 
 # Load packages
 library(tidyverse)
+library(data.table)   # for efficient list concatenation
 data1 <- read_csv("data/data1.csv")
 data2 <- read_csv("data/data2.csv")
 ```
@@ -27,18 +28,151 @@ For both `data1` and `data2` tibbles (a tibble is a data frame with some
 [metadata](https://blog.rstudio.com/2016/03/24/tibble-1-0-0#tibbles-vs-data-frames) attached):
 
 * Find the splines model with the best out-of-sample predictive ability.
-* Create a visualizaztion arguing why you chose this particular model.
-* Create a visualizaztion of this model plotted over the given $(x_i, y_i)$ points for $i=1,\ldots,n=3000$.
+* Create a visualization arguing why you chose this particular model.
+* Create a visualization of this model plotted over the given $(x_i, y_i)$ points for $i=1,\ldots,n=3000$.
 * Give your estimate $\widehat{\sigma}$ of $\sigma$ where the noise component $\epsilon_i$ is distributed with mean 0 and standard deviation $\sigma$.
 
 
-# Data 1
+# Setup 
+
+First, I write a function that runs k-fold cross validation on spline models, using a given degrees of freedom and error metric. 
 
 ```{r, echo=TRUE, warning=FALSE, message=FALSE}
+# Function to compute root mean square error (RMSE)
+rmse <- function(x, y){
+  return(sqrt(mean((x-y)^2)))
+}
+
+# Function to perform k-fold cross validation on splines model with given df
+# Note: assumes single independent variable x and response variable y
+kfold_cv_splines <- function(x, k, df,
+                             error=rmse,
+                             seed=123){
+  # Randomly shuffle data frame (given random seed)
+  set.seed(seed)
+  x_shuffled <- x[sample(nrow(x)),]
+  
+  # Partition data frame into k folds
+  # Note: naive method - final fold may have up to k
+  # more observations than other folds
+  partitions <- seq(from=1, to=nrow(x), by=nrow(x)%/%k)
+  
+  # Store separate data frames for each fold (k data frames in total)
+  # in x_partitions
+  # Note: assumes memory/x size is not an issue
+  x_partitions <- list()
+  for (i in 1:k){
+    # Case for creating final fold
+    if (i == length(partitions)){
+      x_partition <- x_shuffled[partitions[i]:nrow(x_shuffled),]
+    } else{
+      next_i <- i+1
+      x_partition <- x_shuffled[partitions[i]:(partitions[next_i]-1),]
+    }
+    x_partitions[[i]] <- x_partition
+  }
+  
+  # Perform crossvalidation procedure
+  # Store results of given error function in results_list
+  results_list <- list()
+  for (i in 1:k){
+    test <- x_partitions[[i]]
+    train <- data.table::rbindlist(x_partitions[-i])
+    splines_model <- smooth.spline(x=train$x, y=train$y, df = df)
+    results <- predict(splines_model, test$x)
+    results_list[[i]] <- error(unlist(results[2], use.names=FALSE),
+                               test$y)
+  }
+  
+  # Return average error function output on k folds
+  return(mean(unlist(results_list)))
+}
 ```
+
+# Data 1
+
+Now, I run the function that I just created on `data1`. I examine degrees of freedom in a range from 2 to 50 and plot the results.
+
+```{r, echo=TRUE, warning=FALSE, message=FALSE}
+# Set number of folds, degrees of freedom to test
+k <- 10
+dfs <- c(2:50)
+
+# Run k-fold crossvalidation on given dfs and store results
+results1 <- data.frame()
+for (i in dfs){
+  results1 <- rbind(results1, c(i, kfold_cv_splines(data1, k, i)))
+}
+names(results1) <- c("Degrees of freedom", "CV RMSE")
+
+# Plot error against model df
+ggplot(results1, aes(x=`Degrees of freedom`, y=`CV RMSE`)) +
+  geom_point() +
+  labs(title="Crossvalidated Root Mean Square Error vs. Spline Model Degrees of Freedom")
+```
+
+From the visualization, it seems that `df = 35` results in the optimal crossvalidated RMSE (i.e., minimum RMSE value). Let's plot this model on the original data.
+
+```{r}
+splines_model_tidy1 <- smooth.spline(data1$x, data1$y, df=35) %>%
+  broom::augment()
+ggplot(splines_model_tidy1, aes(x=x)) +
+  geom_point(aes(y=y), alpha=0.7) +
+  geom_line(aes(y=.fitted), col="red", size=2) +
+  labs(title="Spline model with df=35 fit on data")
+```
+
+The fit looks pretty good - we see that it matches up with some general patterns in the data without being too "wiggly".
+
+As a final measure, let's try to compute an estimate $\widehat{\sigma_1}$ of $\sigma_1$ where we assume that the noise component $\epsilon_{1_i}$ is distributed with mean 0 and standard deviation $\sigma_1$.
+
+```{r}
+mean(splines_model_tidy1$.resid, na.rm=TRUE)
+sd(splines_model_tidy1$.resid, na.rm=TRUE)
+```
+
+Our estimate of $\widehat{\sigma_1}$ is approximately 15
 
 # Data 2
 
+Now I repeat the entire process for `data2`. I examine degrees of freedom in a range from 2 to 50 and plot the results.
+
 ```{r, echo=TRUE, warning=FALSE, message=FALSE}
+# Set number of folds, degrees of freedom to test
+k <- 10
+dfs <- c(2:50)
+
+# Run k-fold crossvalidation on given dfs and store results
+results2 <- data.frame()
+for (i in dfs){
+  results2 <- rbind(results2, c(i, kfold_cv_splines(data2, k, i)))
+}
+names(results2) <- c("Degrees of freedom", "CV RMSE")
+
+# Plot error against model df
+ggplot(results2, aes(x=`Degrees of freedom`, y=`CV RMSE`)) +
+  geom_point() +
+  labs(title="Crossvalidated Root Mean Square Error vs. Spline Model Degrees of Freedom")
 ```
 
+From the visualization, it seems that `df = 28` results in the optimal crossvalidated RMSE (i.e., minimum RMSE value). Let's plot this model on the original data.
+
+```{r}
+splines_model_tidy2 <- smooth.spline(data2$x, data2$y, df=28) %>%
+  broom::augment()
+ggplot(splines_model_tidy2, aes(x=x)) +
+  geom_point(aes(y=y), alpha=0.7) +
+  geom_line(aes(y=.fitted), col="red", size=2) +
+  labs(title="Spline model with df=28 fit on data2")
+```
+
+Again, the fit looks pretty good - we see that it matches up with some general patterns in the data without being too "wiggly".
+
+Finally, let's compute an estimate $\widehat{\sigma_2}$ of $\sigma_2$ where we assume that the noise component $\epsilon_{2_i}$ is distributed with mean 0 and standard deviation $\sigma_2$.
+
+```{r}
+mean(splines_model_tidy2$.resid, na.rm=TRUE)
+sd(splines_model_tidy2$.resid, na.rm=TRUE)
+```
+
+Our estimate of $\widehat{\sigma_2}$ is approximately 25.
